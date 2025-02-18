@@ -6,7 +6,7 @@ const Footer = () => {
       <div className="container mx-auto">
         <div className="flex flex-col md:flex-row justify-between items-center">
           <div className="mb-4 md:mb-0">
-            <p>© 2024 @re4lity. All rights reserved.</p>
+            <p>© 2025 re4lity. All rights reserved.</p>
           </div>
           <div className="text-sm">
             <p>Licensed under MIT License</p>
