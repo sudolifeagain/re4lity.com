@@ -1,6 +1,20 @@
 {
-  "generated_at": "2026-03-12T22:43:52.454Z",
+  "generated_at": "2026-03-17T13:59:59.142Z",
   "posts": [
+    {
+      "title": "Claude Codeのステータスラインをカスタマイズして使用量クォータを常に表示する",
+      "description": "Claude Codeのステータスラインをrobbyrussellテーマ風にカスタマイズし、5時間/7日間の使用量クォータをリアルタイム表示する方法",
+      "date": "2026-03-17",
+      "slug": "claude-code-statusline",
+      "categories": [
+        "tech"
+      ],
+      "tags": [
+        "Claude Code",
+        "CLI"
+      ],
+      "content": "Claude Codeの入力欄の下にはステータスラインが表示されるが、デフォルトではモデル名とコンテキスト使用量くらいしか表示されない。\n\nMaxプランで使っていると「今どれくらいクォータを消費しているか」が気になるが、毎回Webで確認するのは面倒だ。そこで、ステータスラインをカスタマイズして使用量クォータを常に表示するようにした。\n\n## 完成形\n\n最終的にこのような表示になる。\n\n[Image: カスタマイズ後のステータスライン]\n\n左から順に：\n\n- **プロジェクト名**（シアン）— ワークツリー使用時も元のリポジトリ名を表示\n- **Gitブランチ**（赤）+ dirty flag — 長いブランチ名は自動省略\n- **モデル名**（薄字）\n- **コンテキスト使用率** — 色分け表示\n- **セッションコスト**\n- **5時間/7日間クォータ** — 使用率と残り時間のカウントダウン\n\nクォータの色はしきい値で変化する。50%未満は緑、50〜79%は黄色、80%以上は赤。\n\n## セットアップ\n\n### 前提条件\n\n- `jq`（JSONパーサー）\n- `curl`（API呼び出し用）\n- `git`\n\n### 1. スクリプトの配置\n\n以下のスクリプトを `~/.claude/statusline-command.sh` に保存する。curlで直接ダウンロードできる。\n\n```bash\ncurl -o ~/.claude/statusline-command.sh \\\n  https://gist.githubusercontent.com/sudolifeagain/605b2fdf22b12b87cf0dc485e2992de2/raw/statusline-command.sh\nchmod +x ~/.claude/statusline-command.sh\n```\n\n### 2. settings.jsonに登録\n\n`~/.claude/settings.json` に以下を追加する。\n\n```json\n{\n  \"statusLine\": {\n    \"type\": \"command\",\n    \"command\": \"bash ~/.claude/statusline-command.sh\"\n  }\n}\n```\n\nこれだけで次回のClaude Code起動時からステータスラインが変わる。\n\n## 仕組み\n\n### ステータスラインの入力\n\nClaude Codeはステータスラインスクリプトを実行する際、stdinにJSON形式でセッション情報を渡してくる。\n\n```json\n{\n  \"model\": { \"display_name\": \"Claude Opus 4.6\" },\n  \"workspace\": { \"current_dir\": \"/home/user/project\" },\n  \"context_window\": { \"used_percentage\": 12.5 },\n  \"cost\": { \"total_cost_usd\": 0.45, \"total_duration_ms\": 120000 }\n}\n```\n\nスクリプトは `jq` でこのJSONをパースし、必要な情報を取り出している。\n\n### クォータの取得\n\n5時間/7日間の使用量クォータはClaude Codeの入力JSONには含まれていないため、Anthropic APIから直接取得している。\n\n```bash\ncurl -s -H \"Authorization: Bearer $token\" \\\n  \"https://api.anthropic.com/api/oauth/usage\"\n```\n\nOAuthトークンは `~/.claude/.credentials.json` から読み取る。APIレスポンスは `/tmp/.claude-usage-cache` に5分間キャッシュし、APIコール失敗時は10分間のバックオフを入れることで、レート制限やネットワーク障害に対応している。\n\n### ワークツリー対応\n\n`claude -w` でワークツリーモードを使うと、カレントディレクトリがワークツリーのパスになる。そのままだとプロジェクト名の代わりにワークツリー名（ランダム文字列）が表示されてしまう。\n\n```bash\n# ワークツリーのメインリポジトリパスを取得\nmain_wt=$(git -C \"$cwd\" worktree list --porcelain | head -1 | sed 's/^worktree //')\n```\n\n`git worktree list --porcelain` の1行目がメインワークツリー（元のリポジトリ）のパスを返すので、そこからプロジェクト名を取得している。\n\n### ブランチ名の省略\n\nワークツリーのブランチ名はランダムに生成されて長くなりがちなので、自動省略する機能を入れた。\n\n| 元のブランチ名 | 省略後 |\n|---|---|\n| `worktree-delightful-brewing-wreath` | `wt:delightful-brewing-w…` |\n| `feature/add-user-auth` | `f/add-user-auth` |\n| `fix/null-pointer-crash` | `x/null-pointer-crash` |\n\n25文字を超える場合は末尾を `…` で切り詰める。\n\n### クロスプラットフォーム対応\n\nLinux、macOS、Windows（Git Bash）で動作するよう、プラットフォーム依存の箇所にフォールバックを入れている。\n\n```bash\n# ファイルのmtime取得: GNU stat → BSD stat\n_file_mtime() {\n  stat -c %Y \"$1\" 2>/dev/null || stat -f %m \"$1\" 2>/dev/null || echo 0\n}\n\n# ISO 8601パース: GNU date → BSD date\nlocal reset_epoch=$(date -d \"$clean\" +%s 2>/dev/null || \\\n  date -j -f \"%Y-%m-%dT%H:%M:%S%z\" \"$clean\" +%s 2>/dev/null)\n```\n\n## リポジトリ\n\nスクリプト本体に加えて、カスタムスキル（`/review-pr`、`/copilot-review`）やインストールスクリプトも含めたリポジトリを公開している。\n\n- GitHub: [sudolifeagain/claude-code-config](https://github.com/sudolifeagain/claude-code-config)\n- Gist（スクリプト単体）: [statusline-command.sh](https://gist.github.com/sudolifeagain/605b2fdf22b12b87cf0dc485e2992de2)"
+    },
     {
       "title": "Hugo Stackテーマのモバイルヘッダーを改善する",
       "description": "スクロール追従ヘッダーのバグ修正からアニメーション強化、iOS safe area対応まで",
@@ -36,7 +50,9 @@
       "description": "300人規模の会議の参加者管理システムを無料で運用した話",
       "date": "2025-12-25",
       "slug": "ajmun37-reception",
-      "categories": "tech",
+      "categories": [
+        "tech"
+      ],
       "tags": [
         "模擬国連",
         "Next.js",
@@ -52,7 +68,9 @@
       "description": "CapsLockを「単押し無効」かつ「WASDとの同時押しで矢印キー操作」に設定",
       "date": "2025-11-24",
       "slug": "ubuntu-key-config",
-      "categories": "tech",
+      "categories": [
+        "tech"
+      ],
       "tags": [
         "Ubuntu"
       ],
@@ -75,7 +93,9 @@
       "description": "Wayland環境下での自動起動設定",
       "date": "2025-10-07",
       "slug": "CopyQ-wayland",
-      "categories": "tech",
+      "categories": [
+        "tech"
+      ],
       "tags": [
         "Ubuntu"
       ],
@@ -99,7 +119,9 @@
       "description": "srt→json変換",
       "date": "2025-08-20",
       "slug": "srt-json-site",
-      "categories": "MyWork",
+      "categories": [
+        "MyWork"
+      ],
       "tags": [],
       "content": "## **概要**\n\n最近、YouTube上のプログラミングチュートリアル動画をよく視聴している。  \nただ動画を見ているだけだと理解が浅くなりがちなので、効率的にメモを取りながら学習を進められるWebアプリケーションを自作することにした。  \nそのアプリケーションで字幕データを活用するために、まずは第一歩として、字幕ファイル形式の一つである**SRT形式**を、より汎用性の高い**JSON形式**に変換するためのWebサイトを開発した。\n\n## **作成したサイト**\n\nこちらが完成したサイト。\n\n[**SRT → JSON 変換ツール**](https://srt-to-json.re4lity.com/)\n\n### **使い方**\n\n1. **SRTファイルを入手する**: [DownSub](https://downsub.com/)のようなサイトを使い、YouTube動画からSRT形式の字幕ファイルをダウンロードする。  \n2. **サイトでJSONに変換する**: 作成したサイトにアクセスし、ダウンロードしたSRTファイルをアップロード（またはドラッグ＆ドロップ）する。  \n3. **フォーマットを定義する**: 必要に応じて、出力したいJSONの形式をテンプレートとして自由に編集する。  \n4. **変換とダウンロード**: 「変換」ボタンを押すと、プレビュー画面に結果が表示される。内容を確認し、問題がなければダウンロードする。\n\n## **主な機能**\n\n単なる変換だけでなく、開発を進める中で便利な機能をいくつか追加した。\n\n* **SRT → JSON 変換**: 中核となる変換機能。  \n* **カスタムフォーマット**: ユーザーがJSONの出力形式をテンプレートで自由に定義できる。これにより、様々なアプリケーションの要件に合わせたデータを作成可能。  \n* **多言語対応**: ブラウザの言語設定を検知し、日本語と英語の表示を自動で切り替える。  \n* **便利なUI**: ドラッグ＆ドロップでのファイルアップロード、変換結果のクリップボードへのコピー、入力内容のクリア機能などを実装し、使いやすさを向上させた。\n\n## **開発の経緯と感想**\n\n今回の開発は、AI（Gemini）との対話形式で進めた。\n\n最初に「SRTをJSONに変換するツールが欲しい」という大まかな要望を伝えたところ、わずか数分で基本的な機能を持つPoCを作ることができた。\n\nさらに「こんな機能も欲しい」とアイデアを伝えるたびに、AIがコードを修正・拡張してくれる。\n\n* 「結果をコピーできるようにして」→ **クリップボードコピー機能**を追加  \n* 「ファイルをドラッグでも入れたい」→ **ドラッグ＆ドロップ機能**を実装  \n* 「JSONの形を自分で変えたいんだけど…」→ **カスタムテンプレート機能**という高度な機能を追加  \n* 「海外のユーザーも使えるようにしたい」→ **自動言語検出と多言語対応**を実装\n\nこのように、アイデアを次々と形にしていく過程はかなりスムーズだった。最終的に、当初の想定をはるかに超える多機能なサイトが、デプロイまで含めても1時間とかからずに完成した。\n\nAIとの共同開発は、単に時間を短縮するだけでなく、自分のアイデアを壁打ちし、より良いものへと昇華させていくクリエイティブな体験だと感じたが、同時に\"I don't know what I am doing right now\"という気持ちは頭の中を渦巻いていた。\n\nやはり自力でできる作業を代替していけるのがAIの本当の強みであり、自分が今やっていることの危うさも実感する機会になった。\n\nとはいえこのサイトは良くできていると我ながらに思うので、十分に活用して本命である動画学習サイトの開発も頑張っていこうと考えている。\n\n## **おまけ : ソースコード (GitHub)**\n\n[sudolifeagain/srt-json](https://github.com/sudolifeagain/srt-json)"
     },
@@ -108,7 +130,9 @@
       "description": "モールス信号による暗号の解読",
       "date": "2025-06-20",
       "slug": "crypto-1",
-      "categories": "tech",
+      "categories": [
+        "tech"
+      ],
       "tags": [
         "morse",
         "cryptography"
@@ -120,7 +144,9 @@
       "description": "Googleフォームの回答を特定の数で締め切るスクリプト",
       "date": "2025-06-01",
       "slug": "gas-2",
-      "categories": "tech",
+      "categories": [
+        "tech"
+      ],
       "tags": [
         "GAS",
         "discord",
@@ -134,7 +160,9 @@
       "description": "GASを用いてGoogleフォームの回答をDiscordに通知する方法を説明します",
       "date": "2025-05-24",
       "slug": "gas-1",
-      "categories": "tech",
+      "categories": [
+        "tech"
+      ],
       "tags": [
         "GAS",
         "discord",
@@ -148,7 +176,9 @@
       "description": "菅野よう子の曲で好きなものをまとめます(マクロス関連)",
       "date": "2025-05-21",
       "slug": "MyFavSong-YokoKanno",
-      "categories": "music",
+      "categories": [
+        "music"
+      ],
       "tags": [],
       "content": "## 菅野よう子\n\nマクロスシリーズ、「花は咲く」等で有名な菅野よう子氏。今回はマクロスシリーズの声優が歌う菅野よう子さん作曲の曲で、個人的に好きなものを紹介します。\n\nイントロだけ聞いて、しっくりくるものがあったら各種配信サービスで調べてみてくださいな。\n\n### 🎵 499秒 [feat. 中島愛] - short ver. - 菅野よう子,中島愛\n\n#### コメント\n\n[超時空シアター「499秒 わたしの合体」 │ EXPO 2025 大阪・関西万博 河森 正治 シグネチャーパビリオン「いのちめぐる冒険」 - 河森正治 Official Web Site](https://shojikawamori.jp/expo2025/contents/deepvision/)\n\nいや～いいなぁ、VR酔いしそうだけどこれはどうしても気になっちゃう\n\n万博に行くつもりはあまりなかったんですが、気になります...\n\n---\n\n### 🎵 ユニバーサル・バニー - シェリル・ノーム starring May'n   \n\n#### コメント\n\n劇場版マクロスFです。ストーリーあんまり覚えてないけど曲はすっごく強烈に脳髄にしみ込んでいます。\n\n良い。\n\n---\n\n### 🎵 放課後オーバーフロウ - ランカ・リー=中島愛\n\n#### コメント\n\nアニソンだけどアニソンじゃないような、、san値回復できます\n\nアーティスト名の表記ゆれが結構あって、Spotify上の統計が勿体ないなと思うんですが、どうなんでしょうかね...\n\n### 🎵 いけないボーダーライン - シェリル・ノーム starring May'n,ランカ・リー=中島愛\n\n#### コメント\n\nワルキューレはアニメ自体は未視聴なのですが(血涙)、曲は楽しく聴かせてもらっています\n\n### 🎵 禁断のエリクシア - シェリル・ノーム starring May'n\n\n#### コメント\n\n「あなたの遺伝子を 私の中で混ぜて」って聴けば聴くほどやばくて震える...\n\n禁断のエリクシアにかかっている編集が好きです\n\n### 🎵 天使になっちゃった - シェリル・ノーム starring May'n\n\n#### コメント\n\nちょっとヤンデレ気味なのが響くので好きです\n\n### 🎵 ダイアモンドクレバス - シェリル・ノーム starring May'n\n\n#### コメント\n\n「神様に恋をしてた頃は こんな別れが 来るとは思ってなかったよ」←よい\n\n### 🎵 Welcome To My FanClub's Night! - シェリル・ノーム starring May'n\n\n#### コメント\n\n入りの構成が本当に好きでずっと聴いていられます。\n\n## まとめ\n\nただのマクロス推しでした...菅野よう子さんは他にもSACの曲を担当されていたりするのでそちらも機会があればまとめていきたいです。"
     },
@@ -157,7 +187,9 @@
       "description": "Cloudflareが提供するZeroTrustのアクセス制限をチーム単位で更新できるようにした手法を紹介します",
       "date": "2025-05-15",
       "slug": "Zerotrust-automation",
-      "categories": "tech",
+      "categories": [
+        "tech"
+      ],
       "tags": [
         "automation",
         "cloudflare"
@@ -169,7 +201,9 @@
       "description": "Cloudflareが提供するZeroTrustというサービスについてざっくり説明します",
       "date": "2025-05-15",
       "slug": "zerotrust-intro",
-      "categories": "tech",
+      "categories": [
+        "tech"
+      ],
       "tags": [
         "cloudflare"
       ],
@@ -180,7 +214,9 @@
       "description": "よく聴いている曲を3つ紹介します",
       "date": "2025-05-14",
       "slug": "MyFavSong-250515",
-      "categories": "music",
+      "categories": [
+        "music"
+      ],
       "tags": [],
       "content": "## 最近よく聞く3曲\n\nしんみり、ほかほか、わくわく\n\n### 🎵 One More Light - Linkin Park\n\n#### コメント\n\nリードボーカルのチェスター・ベニントンが参加した最後の主要シングルです。\n\n悲しいけど優しい曲です。\n\n---\n\n### 🎵 HOME - AAAMYYY\n\n#### コメント\n\nアーティスト名は「エイミー」読みです。\n\nあったかい気持ちになりたい時に聴きます。\n\n---\n\n### 🎵 summertime - cinnamons\n\n#### コメント\n\nしゅわしゅわ弾けそうな気持ちになります。\n\n夏が近づくと聴きたくなります。"
     }
